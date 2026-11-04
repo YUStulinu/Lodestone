@@ -61,8 +61,12 @@ pub fn expr(e: &Expr, cols: &[Col]) -> String {
             s + " END"
         }
         Expr::Cast(x, t) => format!("CAST({} AS {t})", f(x)),
-        Expr::InList(x, list, neg) => format!("({} {}IN ({}))", f(x), if *neg { "NOT " } else { "" }, list.iter().map(f).collect::<Vec<_>>().join(", ")),
-        Expr::Like(x, p, neg, ci) => format!("({} {}{} {})", f(x), if *neg { "NOT " } else { "" }, if *ci { "ILIKE" } else { "LIKE" }, f(p)),
+        Expr::InList(x, list, neg) => {
+            format!("({} {}IN ({}))", f(x), if *neg { "NOT " } else { "" }, list.iter().map(f).collect::<Vec<_>>().join(", "))
+        }
+        Expr::Like(x, p, neg, ci) => {
+            format!("({} {}{} {})", f(x), if *neg { "NOT " } else { "" }, if *ci { "ILIKE" } else { "LIKE" }, f(p))
+        }
         Expr::IsNull(x, neg) => format!("({} IS {}NULL)", f(x), if *neg { "NOT " } else { "" }),
         Expr::Sub(sp, left) => match sp.kind {
             SubKind::Scalar => format!("(SubPlan {})", sp.id + 1),
@@ -87,7 +91,19 @@ fn agg(a: &Agg, cols: &[Col]) -> String {
 }
 
 fn bound(b: &Option<(Expr, bool)>, cols: &[Col], lower: bool) -> Option<String> {
-    b.as_ref().map(|(e, inc)| format!("{} {}", if lower { if *inc { ">=" } else { ">" } } else if *inc { "<=" } else { "<" }, expr(e, cols)))
+    b.as_ref().map(|(e, inc)| {
+        format!(
+            "{} {}",
+            if lower {
+                if *inc { ">=" } else { ">" }
+            } else if *inc {
+                "<="
+            } else {
+                "<"
+            },
+            expr(e, cols)
+        )
+    })
 }
 
 /// A node's name and its details.
@@ -108,14 +124,17 @@ fn describe(p: &Plan) -> (String, Vec<(&'static str, String)>, Map<String, Json>
                 Access::Keys(keys) => {
                     let ks: Vec<String> = keys
                         .iter()
-                        .map(|k| k.iter().zip(&pk).map(|(e, c)| format!("{} = {}", c.name, expr(e, cols))).collect::<Vec<_>>().join(" AND "))
+                        .map(|k| {
+                            k.iter().zip(&pk).map(|(e, c)| format!("{} = {}", c.name, expr(e, cols))).collect::<Vec<_>>().join(" AND ")
+                        })
                         .collect();
                     d.push(("Key Cond", ks.join(" OR ")));
                     format!("Primary Key Lookup on {}", table.name)
                 }
                 Access::KeyRange { lo, hi } => {
                     let c = &pk[0].name;
-                    let parts: Vec<String> = [bound(lo, cols, true), bound(hi, cols, false)].into_iter().flatten().map(|b| format!("{c} {b}")).collect();
+                    let parts: Vec<String> =
+                        [bound(lo, cols, true), bound(hi, cols, false)].into_iter().flatten().map(|b| format!("{c} {b}")).collect();
                     d.push(("Key Cond", parts.join(" AND ")));
                     format!("Primary Key Range Scan on {}", table.name)
                 }
@@ -124,7 +143,13 @@ fn describe(p: &Plan) -> (String, Vec<(&'static str, String)>, Map<String, Json>
                     extra.insert("Index Name".into(), json!(ix.name));
                     let ks: Vec<String> = keys
                         .iter()
-                        .map(|k| k.iter().zip(&ix.columns).map(|(e, &c)| format!("{} = {}", table.columns[c].name, expr(e, cols))).collect::<Vec<_>>().join(" AND "))
+                        .map(|k| {
+                            k.iter()
+                                .zip(&ix.columns)
+                                .map(|(e, &c)| format!("{} = {}", table.columns[c].name, expr(e, cols)))
+                                .collect::<Vec<_>>()
+                                .join(" AND ")
+                        })
                         .collect();
                     d.push(("Index Cond", ks.join(" OR ")));
                     format!("Index Scan using {} on {}", ix.name, table.name)
@@ -133,7 +158,8 @@ fn describe(p: &Plan) -> (String, Vec<(&'static str, String)>, Map<String, Json>
                     let ix = &table.indexes[*index];
                     extra.insert("Index Name".into(), json!(ix.name));
                     let c = &table.columns[ix.columns[0]].name;
-                    let parts: Vec<String> = [bound(lo, cols, true), bound(hi, cols, false)].into_iter().flatten().map(|b| format!("{c} {b}")).collect();
+                    let parts: Vec<String> =
+                        [bound(lo, cols, true), bound(hi, cols, false)].into_iter().flatten().map(|b| format!("{c} {b}")).collect();
                     d.push(("Index Cond", parts.join(" AND ")));
                     format!("Index Range Scan using {} on {}", ix.name, table.name)
                 }
@@ -187,7 +213,14 @@ fn describe(p: &Plan) -> (String, Vec<(&'static str, String)>, Map<String, Json>
             d.push((
                 "Sort Key",
                 keys.iter()
-                    .map(|k| format!("{}{}{}", expr(&k.expr, &c), if k.desc { " DESC" } else { "" }, if k.nulls_first != k.desc { if k.nulls_first { " NULLS FIRST" } else { " NULLS LAST" } } else { "" }))
+                    .map(|k| {
+                        format!(
+                            "{}{}{}",
+                            expr(&k.expr, &c),
+                            if k.desc { " DESC" } else { "" },
+                            if k.nulls_first != k.desc { if k.nulls_first { " NULLS FIRST" } else { " NULLS LAST" } } else { "" }
+                        )
+                    })
                     .collect::<Vec<_>>()
                     .join(", "),
             ));
@@ -215,7 +248,10 @@ fn describe(p: &Plan) -> (String, Vec<(&'static str, String)>, Map<String, Json>
         Node::Insert { table, .. } => format!("Insert on {}", table.name),
         Node::Update { table, input, set } => {
             let c = input_cols(input);
-            d.push(("Set", set.iter().map(|(i, e)| format!("{} = {}", table.columns[*i].name, expr(e, &c))).collect::<Vec<_>>().join(", ")));
+            d.push((
+                "Set",
+                set.iter().map(|(i, e)| format!("{} = {}", table.columns[*i].name, expr(e, &c))).collect::<Vec<_>>().join(", "),
+            ));
             format!("Update on {}", table.name)
         }
         Node::Delete { table, .. } => format!("Delete on {}", table.name),

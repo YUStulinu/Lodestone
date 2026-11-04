@@ -101,9 +101,7 @@ impl Node {
     pub fn size(&self) -> usize {
         match self {
             Node::Meta { .. } => 1 + 8 + 8,
-            Node::Leaf { keys, values, .. } => {
-                HEADER + keys.iter().zip(values).map(|(k, v)| leaf_entry_size(k, v)).sum::<usize>()
-            }
+            Node::Leaf { keys, values, .. } => HEADER + keys.iter().zip(values).map(|(k, v)| leaf_entry_size(k, v)).sum::<usize>(),
             Node::Interior { keys, .. } => HEADER + keys.iter().map(|k| interior_entry_size(k)).sum::<usize>(),
         }
     }

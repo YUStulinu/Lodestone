@@ -1,8 +1,10 @@
 //! A B+tree of byte keys and values over the pager. The root stays on page 1: when it splits,
 //! its contents move to two new pages and it becomes their parent. Leaves are chained for scans.
 //!
-//! Deletion removes the entry and leaves the page as it is; underfull and empty leaves are not
-//! merged (as in PostgreSQL's B-tree between vacuums). Scans skip empty leaves.
+//! Deletion removes the entry; a leaf left empty is unlinked from its parent and from the leaf
+//! chain (and a parent left with no children goes the same way), so scans never wade through
+//! empty pages. Underfull leaves are not merged, and unlinked pages are not reused: the file
+//! does not shrink.
 
 use std::io;
 use std::ops::Bound;
@@ -123,22 +125,67 @@ fn split_point(sizes: impl Iterator<Item = usize>) -> usize {
 }
 
 pub fn delete(pager: &mut Pager, key: &[u8]) -> io::Result<bool> {
-    let (_, leaf) = descend(pager, key)?;
+    let (path, leaf) = descend(pager, key)?;
     let Node::Leaf { keys, .. } = pager.get(leaf)? else { unreachable!() };
     let Ok(i) = keys.binary_search_by(|k| k.as_slice().cmp(key)) else { return Ok(false) };
     let Node::Leaf { keys, values, .. } = pager.get_mut(leaf)? else { unreachable!() };
     keys.remove(i);
     values.remove(i);
+    if keys.is_empty() && leaf != ROOT {
+        unlink(pager, path, leaf)?;
+    }
     Ok(true)
 }
 
+/// The leaf just before the one reached by `path`, if any.
+fn previous_leaf(pager: &mut Pager, path: &[(PageId, usize)]) -> io::Result<Option<PageId>> {
+    for &(parent, i) in path.iter().rev() {
+        if i == 0 {
+            continue;
+        }
+        let Node::Interior { children, .. } = pager.get(parent)? else { unreachable!() };
+        let mut id = children[i - 1];
+        loop {
+            match pager.get(id)? {
+                Node::Interior { children, .. } => id = *children.last().unwrap(),
+                _ => return Ok(Some(id)),
+            }
+        }
+    }
+    Ok(None)
+}
+
+/// Takes an empty leaf out of the tree.
+fn unlink(pager: &mut Pager, mut path: Vec<(PageId, usize)>, leaf: PageId) -> io::Result<()> {
+    let Node::Leaf { next, .. } = pager.get(leaf)? else { unreachable!() };
+    let next = *next;
+    if let Some(prev) = previous_leaf(pager, &path)?
+        && let Node::Leaf { next: n, .. } = pager.get_mut(prev)?
+    {
+        *n = next;
+    }
+    while let Some((parent, i)) = path.pop() {
+        let Node::Interior { keys, children } = pager.get_mut(parent)? else { unreachable!() };
+        children.remove(i);
+        if !keys.is_empty() {
+            keys.remove(i.saturating_sub(1));
+        }
+        if !children.is_empty() {
+            return Ok(());
+        }
+        // The parent is empty too. The root becomes an empty leaf; any other parent is removed
+        // from its own parent, its page left behind as an (unreachable) empty leaf so that it
+        // still encodes.
+        *pager.get_mut(parent)? = Node::empty_leaf();
+        if parent == ROOT {
+            return Ok(());
+        }
+    }
+    Ok(())
+}
+
 /// Calls `f` on every entry in the range, in key order, until it returns false.
-pub fn scan(
-    pager: &mut Pager,
-    from: Bound<&[u8]>,
-    to: Bound<&[u8]>,
-    mut f: impl FnMut(&[u8], &[u8]) -> bool,
-) -> io::Result<()> {
+pub fn scan(pager: &mut Pager, from: Bound<&[u8]>, to: Bound<&[u8]>, mut f: impl FnMut(&[u8], &[u8]) -> bool) -> io::Result<()> {
     let start: &[u8] = match from {
         Bound::Included(k) | Bound::Excluded(k) => k,
         Bound::Unbounded => &[],
@@ -319,6 +366,39 @@ mod tests {
         })
         .unwrap();
         assert_eq!(n, model.len());
+    }
+
+    #[test]
+    fn emptied_leaves_leave_the_tree() {
+        let vfs = SimVfs::new();
+        let mut p = open(&vfs);
+        for i in 0..3000u32 {
+            insert(&mut p, &i.to_be_bytes(), &[7; 100]).unwrap();
+        }
+        let full = check(&mut p).unwrap();
+        // Delete a block in the middle, then the start, then everything.
+        for i in 1000..2500u32 {
+            delete(&mut p, &i.to_be_bytes()).unwrap();
+        }
+        for i in 0..300u32 {
+            delete(&mut p, &i.to_be_bytes()).unwrap();
+        }
+        let shape = check(&mut p).unwrap();
+        assert_eq!(shape.entries, 1200);
+        assert!(shape.leaves < full.leaves / 2, "{shape:?} vs {full:?}");
+        let mut n = 0;
+        scan(&mut p, Bound::Included(&999u32.to_be_bytes()[..]), Bound::Unbounded, |_, _| {
+            n += 1;
+            true
+        })
+        .unwrap();
+        assert_eq!(n, 1 + 500);
+        for i in (300..1000u32).chain(2500..3000) {
+            delete(&mut p, &i.to_be_bytes()).unwrap();
+        }
+        assert_eq!(check(&mut p).unwrap(), Shape { depth: 1, leaves: 1, interior: 0, entries: 0 });
+        insert(&mut p, b"again", b"1").unwrap();
+        assert_eq!(get(&mut p, b"again").unwrap(), Some(b"1".to_vec()));
     }
 
     #[test]

@@ -1,0 +1,9 @@
+{
+  "version": "2.0.0",
+  "tasks": [
+    { "label": "engine: test", "type": "shell", "command": "cargo test --release", "options": { "cwd": "${workspaceFolder}/engine" }, "group": "test" },
+    { "label": "server: test", "type": "shell", "command": "go test ./...", "options": { "cwd": "${workspaceFolder}/server", "env": { "LODESTONE_BIN": "${workspaceFolder}/engine/target/release/lodestone" } }, "group": "test" },
+    { "label": "web: test", "type": "shell", "command": "npm test", "options": { "cwd": "${workspaceFolder}/web" }, "group": "test" },
+    { "label": "run: server + plan viewer", "type": "shell", "command": "go run ./cmd/lodestone-pg --engine-bin ../engine/target/release/lodestone --db ../data/demo.db --web ../web/dist", "options": { "cwd": "${workspaceFolder}/server" }, "isBackground": true }
+  ]
+}

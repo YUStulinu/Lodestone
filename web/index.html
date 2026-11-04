@@ -1,0 +1,34 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Lodestone — plan viewer</title>
+  </head>
+  <body>
+    <header>
+      <h1>Lodestone <span>plan viewer</span></h1>
+      <p>How a query runs: the operators, the rows each one was expected to produce and did, and where the time went.</p>
+    </header>
+    <main>
+      <section id="editor">
+        <label for="sql">Query</label>
+        <textarea id="sql" spellcheck="false"></textarea>
+        <div class="buttons">
+          <button id="explain" type="button">Explain</button>
+          <button id="analyze" type="button" class="primary">Explain analyze</button>
+        </div>
+        <label for="samples">Examples</label>
+        <select id="samples"></select>
+        <button id="demo" type="button" class="quiet">Load demo tables</button>
+        <p id="status"></p>
+        <p class="note">EXPLAIN ANALYZE runs the query inside a transaction that is rolled back, so writes are measured but not kept.</p>
+      </section>
+      <section id="result">
+        <div id="summary"></div>
+        <div id="tree"></div>
+      </section>
+    </main>
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>

@@ -1,0 +1,68 @@
+{
+  "bytes_on_disk": {
+    "lodestone": 73424928,
+    "sqlite": 22577088
+  },
+  "cases": [
+    {
+      "case": "insert, one transaction (rows)",
+      "lodestone_per_s": 36356.0,
+      "ops": 100000,
+      "sqlite_faster_by": 10.1,
+      "sqlite_per_s": 367341.0
+    },
+    {
+      "case": "insert, a durable commit each (rows)",
+      "lodestone_per_s": 388.0,
+      "ops": 2000,
+      "sqlite_faster_by": 1.2,
+      "sqlite_per_s": 453.0
+    },
+    {
+      "case": "point lookup by primary key (queries)",
+      "lodestone_per_s": 35795.0,
+      "ops": 100000,
+      "sqlite_faster_by": 2.5,
+      "sqlite_per_s": 88266.0
+    },
+    {
+      "case": "count by secondary index (queries)",
+      "lodestone_per_s": 10021.0,
+      "ops": 20000,
+      "sqlite_faster_by": 7.9,
+      "sqlite_per_s": 79660.0
+    },
+    {
+      "case": "range of 101 rows by primary key (queries)",
+      "lodestone_per_s": 6596.0,
+      "ops": 1000,
+      "sqlite_faster_by": 6.0,
+      "sqlite_per_s": 39554.0
+    },
+    {
+      "case": "full scan + GROUP BY (queries)",
+      "lodestone_per_s": 9.0,
+      "ops": 5,
+      "sqlite_faster_by": 2.4,
+      "sqlite_per_s": 22.0
+    },
+    {
+      "case": "join of two 100k-row tables (queries)",
+      "lodestone_per_s": 6.0,
+      "ops": 5,
+      "sqlite_faster_by": 1.6,
+      "sqlite_per_s": 9.0
+    },
+    {
+      "case": "update by primary key, one transaction (rows)",
+      "lodestone_per_s": 9544.0,
+      "ops": 10000,
+      "sqlite_faster_by": 3.1,
+      "sqlite_per_s": 30038.0
+    }
+  ],
+  "lodestone_settings": "log synced at every commit, statements parsed and planned each time",
+  "rows": 100000,
+  "sqlite_settings": "journal_mode=WAL, synchronous=FULL, prepared statements",
+  "sqlite_version": "3.54.1"
+}

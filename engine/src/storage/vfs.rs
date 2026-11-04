@@ -11,6 +11,7 @@ use std::io;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
+#[allow(clippy::len_without_is_empty)]
 pub trait File: Send {
     /// Reads up to `buf.len()` bytes at `offset`; returns how many were read (fewer at the end).
     fn read_at(&mut self, buf: &mut [u8], offset: u64) -> io::Result<usize>;

@@ -1,0 +1,6 @@
+{
+  "rust-analyzer.linkedProjects": ["engine/Cargo.toml"],
+  "rust-analyzer.cargo.features": ["bench"],
+  "gopls": { "build.directoryFilters": ["-engine", "-web"] },
+  "files.exclude": { "**/target": true, "**/node_modules": true }
+}

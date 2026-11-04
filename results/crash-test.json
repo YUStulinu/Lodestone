@@ -1,0 +1,11 @@
+{
+  "failed_checks": 0,
+  "kills": 300,
+  "kills_after_a_checkpoint": 96,
+  "platform": "windows",
+  "problems": [],
+  "seconds": 215.0,
+  "seed": 25,
+  "transactions_committed": 7705,
+  "unreported_but_committed": 146
+}

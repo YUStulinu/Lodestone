@@ -157,9 +157,7 @@ impl Value {
         };
         match (self, other) {
             (Int(a), Int(b)) => a.cmp(b),
-            (Int(_) | Float(_), Int(_) | Float(_)) => {
-                self.as_f64().unwrap().total_cmp(&other.as_f64().unwrap())
-            }
+            (Int(_) | Float(_), Int(_) | Float(_)) => self.as_f64().unwrap().total_cmp(&other.as_f64().unwrap()),
             (Text(a), Text(b)) => a.cmp(b),
             (Bool(a), Bool(b)) => a.cmp(b),
             _ => rank(self).cmp(&rank(other)),
@@ -180,7 +178,7 @@ impl Value {
             (Int(i), DataType::Text) => Text(i.to_string()),
             (Float(f), DataType::Float) => Float(*f),
             (Float(f), DataType::Int) => {
-                if f.is_nan() || f.abs() >= 9.223372036854775807e18 {
+                if f.is_nan() || f.abs() >= 9.223_372_036_854_776e18 {
                     return err!("22003", "integer out of range");
                 }
                 Int(f.round() as i64)
@@ -245,8 +243,7 @@ pub fn format_float(f: f64) -> String {
     if f.is_nan() {
         return "NaN".into();
     }
-    let s = format!("{f}");
-    if f.fract() == 0.0 && f.abs() < 1e16 && !s.contains('e') { s } else { s }
+    format!("{f}")
 }
 
 impl fmt::Display for Value {

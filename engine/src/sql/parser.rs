@@ -13,10 +13,58 @@ pub struct Parser<'a> {
 
 /// Words that end an expression or cannot be an alias.
 const RESERVED: &[&str] = &[
-    "select", "from", "where", "group", "having", "order", "limit", "offset", "union", "intersect", "except", "join",
-    "inner", "left", "right", "cross", "on", "using", "and", "or", "not", "as", "by", "asc", "desc", "into", "values",
-    "set", "when", "then", "else", "end", "case", "is", "in", "between", "like", "ilike", "null", "outer", "full",
-    "natural", "all", "distinct", "create", "drop", "insert", "update", "delete", "returning", "nulls", "window",
+    "select",
+    "from",
+    "where",
+    "group",
+    "having",
+    "order",
+    "limit",
+    "offset",
+    "union",
+    "intersect",
+    "except",
+    "join",
+    "inner",
+    "left",
+    "right",
+    "cross",
+    "on",
+    "using",
+    "and",
+    "or",
+    "not",
+    "as",
+    "by",
+    "asc",
+    "desc",
+    "into",
+    "values",
+    "set",
+    "when",
+    "then",
+    "else",
+    "end",
+    "case",
+    "is",
+    "in",
+    "between",
+    "like",
+    "ilike",
+    "null",
+    "outer",
+    "full",
+    "natural",
+    "all",
+    "distinct",
+    "create",
+    "drop",
+    "insert",
+    "update",
+    "delete",
+    "returning",
+    "nulls",
+    "window",
 ];
 
 pub fn parse(sql: &str) -> Result<Vec<Statement>> {
@@ -220,10 +268,8 @@ impl<'a> Parser<'a> {
             }
             "reindex" => {
                 self.pos += 1;
-                if !matches!(self.peek(), None | Some(Token::Sym(";"))) {
-                    self.ident()?;
-                }
-                Ok(Statement::Reindex)
+                let name = if matches!(self.peek(), None | Some(Token::Sym(";"))) { None } else { Some(self.ident()?) };
+                Ok(Statement::Reindex(name))
             }
             "show" => {
                 self.pos += 1;
@@ -301,8 +347,9 @@ impl<'a> Parser<'a> {
             return self.unexpected();
         };
         let t = match w.to_ascii_lowercase().as_str() {
-            "int" | "integer" | "bigint" | "smallint" | "tinyint" | "int2" | "int4" | "int8" | "mediumint" | "serial"
-            | "bigserial" => DataType::Int,
+            "int" | "integer" | "bigint" | "smallint" | "tinyint" | "int2" | "int4" | "int8" | "mediumint" | "serial" | "bigserial" => {
+                DataType::Int
+            }
             "real" | "float" | "float4" | "float8" | "numeric" | "decimal" | "number" => DataType::Float,
             "double" => {
                 self.eat_word("precision");
@@ -559,7 +606,7 @@ impl<'a> Parser<'a> {
         let mut from = Vec::new();
         if self.eat_word("from") {
             loop {
-                from.push(self.from_item()?);
+                from.push(self.join_tree()?);
                 if !self.eat_sym(",") {
                     break;
                 }
@@ -588,7 +635,7 @@ impl<'a> Parser<'a> {
                 let alias = self.alias()?;
                 return Ok(FromItem::Subquery { query: Box::new(q), alias });
             }
-            let item = self.from_item()?;
+            let item = self.join_tree()?;
             self.expect_sym(")")?;
             return Ok(item);
         }
@@ -597,7 +644,7 @@ impl<'a> Parser<'a> {
         Ok(FromItem::Table { name, alias })
     }
 
-    fn from_item(&mut self) -> Result<FromItem> {
+    fn join_tree(&mut self) -> Result<FromItem> {
         let mut left = self.table_factor()?;
         loop {
             let kind = if self.eat_word("cross") {
@@ -732,7 +779,12 @@ impl<'a> Parser<'a> {
                     }
                     "like" | "ilike" => {
                         let pattern = self.expr_prec(7)?;
-                        Expr::Like { expr: Box::new(left), pattern: Box::new(pattern), negated, case_insensitive: w.eq_ignore_ascii_case("ilike") }
+                        Expr::Like {
+                            expr: Box::new(left),
+                            pattern: Box::new(pattern),
+                            negated,
+                            case_insensitive: w.eq_ignore_ascii_case("ilike"),
+                        }
                     }
                     _ => unreachable!(),
                 },
@@ -886,8 +938,9 @@ mod tests {
             one("CREATE TABLE t1(a INTEGER PRIMARY KEY, b VARCHAR(30) NOT NULL DEFAULT 'x', c REAL, UNIQUE (b, c))"),
             Statement::CreateTable { ref columns, ref unique, .. } if columns.len() == 3 && columns[0].primary_key && !columns[1].nullable && unique.len() == 1
         ));
-        let Statement::Select(q) = one("SELECT DISTINCT t.a AS x, count(*), b c FROM t1 AS t LEFT JOIN t2 ON t.a = t2.a, t3 WHERE a > 1 GROUP BY 1 HAVING count(*) > 2 ORDER BY 2 DESC NULLS LAST LIMIT 5 OFFSET 1")
-        else {
+        let Statement::Select(q) = one(
+            "SELECT DISTINCT t.a AS x, count(*), b c FROM t1 AS t LEFT JOIN t2 ON t.a = t2.a, t3 WHERE a > 1 GROUP BY 1 HAVING count(*) > 2 ORDER BY 2 DESC NULLS LAST LIMIT 5 OFFSET 1",
+        ) else {
             panic!()
         };
         let SetExpr::Select(s) = &q.body else { panic!() };
@@ -895,7 +948,10 @@ mod tests {
         assert_eq!(q.order_by[0].nulls_first, Some(false));
         assert!(matches!(one("SELECT 1 UNION ALL SELECT 2 EXCEPT SELECT 3").clone(), Statement::Select(_)));
         assert!(matches!(one("INSERT INTO t VALUES (1, 'a'), (2, NULL)"), Statement::Insert { .. }));
-        assert!(matches!(one("INSERT INTO t (a) SELECT a FROM u"), Statement::Insert { columns: Some(_), source: InsertSource::Query(_), .. }));
+        assert!(matches!(
+            one("INSERT INTO t (a) SELECT a FROM u"),
+            Statement::Insert { columns: Some(_), source: InsertSource::Query(_), .. }
+        ));
         assert!(matches!(one("UPDATE t SET a = a + 1, b = 2 WHERE c"), Statement::Update { ref set, .. } if set.len() == 2));
         assert!(matches!(one("EXPLAIN (ANALYZE, FORMAT JSON) SELECT 1"), Statement::Explain { analyze: true, json: true, .. }));
         let Statement::CreateView { sql, .. } = one("CREATE VIEW v AS SELECT a FROM t WHERE a > 1") else { panic!() };

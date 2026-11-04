@@ -307,14 +307,16 @@ fn func(f: Func, args: Vec<Value>) -> Result<Value> {
             best.unwrap_or(Null)
         }
         Func::Version => Text(format!("PostgreSQL 16.0 (Lodestone {})", env!("CARGO_PKG_VERSION"))),
-        Func::Typeof => Text(match arg(0) {
-            Null => "null",
-            Bool(_) => "boolean",
-            Int(_) => "integer",
-            Float(_) => "real",
-            Text(_) => "text",
-        }
-        .into()),
+        Func::Typeof => Text(
+            match arg(0) {
+                Null => "null",
+                Bool(_) => "boolean",
+                Int(_) => "integer",
+                Float(_) => "real",
+                Text(_) => "text",
+            }
+            .into(),
+        ),
         _ if arg(0).is_null() => Null,
         Func::Abs => match arg(0) {
             Int(i) => Int(i.checked_abs().ok_or_else(|| Error::new("22003", "integer out of range"))?),
@@ -552,7 +554,9 @@ pub fn build<'a>(plan: &'a Plan, ctx: &'a Ctx<'a>) -> Result<Box<dyn Exec + 'a>>
             pending: VecDeque::new(),
             right_width: right.cols.len(),
         }),
-        Node::Aggregate { input, group, aggs } => Box::new(Aggregate { input: Some(build(input, ctx)?), group, aggs, ctx, out: VecDeque::new() }),
+        Node::Aggregate { input, group, aggs } => {
+            Box::new(Aggregate { input: Some(build(input, ctx)?), group, aggs, ctx, out: VecDeque::new() })
+        }
         Node::Sort { input, keys } => Box::new(Sort { input: Some(build(input, ctx)?), keys, ctx, out: VecDeque::new() }),
         Node::Limit { input, limit, offset } => {
             let n = |e: &Option<Expr>, what: &str| -> Result<Option<u64>> {
@@ -602,7 +606,10 @@ pub struct Scan<'a> {
 fn key_value(v: Value, ty: DataType) -> Option<Value> {
     match (&v, ty) {
         (Value::Null, _) => Some(Value::Null),
-        (Value::Int(_), DataType::Int) | (Value::Float(_), DataType::Float) | (Value::Text(_), DataType::Text) | (Value::Bool(_), DataType::Bool) => Some(v),
+        (Value::Int(_), DataType::Int)
+        | (Value::Float(_), DataType::Float)
+        | (Value::Text(_), DataType::Text)
+        | (Value::Bool(_), DataType::Bool) => Some(v),
         (Value::Int(i), DataType::Float) => Some(Value::Float(*i as f64)),
         (Value::Float(f), DataType::Int) if f.fract() == 0.0 && f.abs() < 9e18 => Some(Value::Int(*f as i64)),
         _ => None,
@@ -748,11 +755,7 @@ impl<'a> Scan<'a> {
             Source::Index(ranges) => {
                 while let Some((p, from, to)) = ranges.pop_front() {
                     // A full-key range (p empty) or a range within the index prefix.
-                    let (prefix, from, to) = if p.is_empty() {
-                        (Vec::new(), from, to)
-                    } else {
-                        (p, from, to)
-                    };
+                    let (prefix, from, to) = if p.is_empty() { (Vec::new(), from, to) } else { (p, from, to) };
                     let range = Range { prefix: &prefix, from: as_ref(&from), to: as_ref(&to) };
                     for (_, row_suffix) in txn.scan(&range, usize::MAX)? {
                         let mut key = self.prefix.clone();
@@ -774,10 +777,10 @@ impl<'a> Scan<'a> {
     pub fn next_keyed(&mut self) -> Result<Option<(Vec<u8>, Row)>> {
         loop {
             while let Some((k, row)) = self.buf.pop_front() {
-                if let Some(f) = self.filter {
-                    if !passes(f, &row, self.ctx)? {
-                        continue;
-                    }
+                if let Some(f) = self.filter
+                    && !passes(f, &row, self.ctx)?
+                {
+                    continue;
                 }
                 return Ok(Some((k, row)));
             }
@@ -892,10 +895,10 @@ impl Exec for NestedLoop<'_> {
                 let mut row = left.clone();
                 row.extend_from_slice(&right[self.pos]);
                 self.pos += 1;
-                if let Some(on) = self.on {
-                    if !passes(on, &row, self.ctx)? {
-                        continue;
-                    }
+                if let Some(on) = self.on
+                    && !passes(on, &row, self.ctx)?
+                {
+                    continue;
                 }
                 self.matched = true;
                 return Ok(Some(row));
@@ -953,19 +956,19 @@ impl Exec for HashJoin<'_> {
             }
             let Some(left) = self.left.next()? else { return Ok(None) };
             let mut matched = false;
-            if let Some(k) = key_of(self.left_keys, &left, self.ctx)? {
-                if let Some(rows) = self.table.as_ref().unwrap().get(&k) {
-                    for r in rows {
-                        let mut row = left.clone();
-                        row.extend_from_slice(r);
-                        if let Some(p) = self.residual {
-                            if !passes(p, &row, self.ctx)? {
-                                continue;
-                            }
-                        }
-                        matched = true;
-                        self.pending.push_back(row);
+            if let Some(k) = key_of(self.left_keys, &left, self.ctx)?
+                && let Some(rows) = self.table.as_ref().unwrap().get(&k)
+            {
+                for r in rows {
+                    let mut row = left.clone();
+                    row.extend_from_slice(r);
+                    if let Some(p) = self.residual
+                        && !passes(p, &row, self.ctx)?
+                    {
+                        continue;
                     }
+                    matched = true;
+                    self.pending.push_back(row);
                 }
             }
             if !matched && self.kind == JoinType::Left {
@@ -1103,8 +1106,20 @@ impl Exec for Aggregate<'_> {
 pub fn order_cmp(a: &Value, b: &Value, desc: bool, nulls_first: bool) -> Ordering {
     match (a.is_null(), b.is_null()) {
         (true, true) => Ordering::Equal,
-        (true, false) => if nulls_first { Ordering::Less } else { Ordering::Greater },
-        (false, true) => if nulls_first { Ordering::Greater } else { Ordering::Less },
+        (true, false) => {
+            if nulls_first {
+                Ordering::Less
+            } else {
+                Ordering::Greater
+            }
+        }
+        (false, true) => {
+            if nulls_first {
+                Ordering::Greater
+            } else {
+                Ordering::Less
+            }
+        }
         _ => {
             let o = a.sort_cmp(b);
             if desc { o.reverse() } else { o }
@@ -1267,13 +1282,12 @@ fn row_count_key(table: &Table) -> Vec<u8> {
 fn add_index_entries(ctx: &Ctx, table: &Table, row: &[Value], row_key: &[u8]) -> Result<()> {
     for ix in &table.indexes {
         let (k, v) = table.index_entry(ix, row, row_key);
-        if ix.unique {
-            if let Some(existing) = ctx.txn.get(&k)? {
-                if existing != v {
-                    let cols: Vec<&str> = ix.columns.iter().map(|&c| table.columns[c].name.as_str()).collect();
-                    return err!("23505", "duplicate key value violates unique constraint \"{}\" ({})", ix.name, cols.join(", "));
-                }
-            }
+        if ix.unique
+            && let Some(existing) = ctx.txn.get(&k)?
+            && existing != v
+        {
+            let cols: Vec<&str> = ix.columns.iter().map(|&c| table.columns[c].name.as_str()).collect();
+            return err!("23505", "duplicate key value violates unique constraint \"{}\" ({})", ix.name, cols.join(", "));
         }
         ctx.txn.set(&k, &v)?;
     }

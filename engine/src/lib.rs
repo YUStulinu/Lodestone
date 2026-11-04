@@ -4,8 +4,11 @@
 //! * [`mvcc`]: snapshot-isolated transactions over the tree.
 //! * [`sql`]: parser, planner and optimiser, executor.
 
+#![allow(clippy::type_complexity)]
+
 pub mod keycode;
 pub mod mvcc;
+pub mod slt;
 pub mod sql;
 pub mod storage;
 

@@ -22,10 +22,8 @@ pub fn fold(e: Expr) -> Expr {
         *c = fold(taken);
     });
     let foldable = !matches!(e, Expr::Const(_)) && is_pure_const(&e);
-    if foldable {
-        if let Ok(v) = exec::eval_const(&e) {
-            return Expr::Const(v);
-        }
+    if foldable && let Ok(v) = exec::eval_const(&e) {
+        return Expr::Const(v);
     }
     // TRUE AND x = x; FALSE AND x = FALSE (x has no side effects).
     if let Expr::Bin(BinOp::And, a, b) = &e {
@@ -153,15 +151,17 @@ fn range_on(conj: &[Expr], col: usize, ty: DataType) -> Bound2 {
 /// Equality lookups on a column: `col = c` gives one value, `col IN (c1, c2, ...)` several.
 fn eq_values(conj: &[Expr], col: usize, ty: DataType) -> Option<Vec<Expr>> {
     for c in conj {
-        if let Some((i, BinOp::Eq, v)) = column_compare(c) {
-            if i == col && key_compatible(ty, v.data_type(&[])) {
-                return Some(vec![v.clone()]);
-            }
+        if let Some((i, BinOp::Eq, v)) = column_compare(c)
+            && i == col
+            && key_compatible(ty, v.data_type(&[]))
+        {
+            return Some(vec![v.clone()]);
         }
-        if let Expr::InList(x, list, false) = c {
-            if **x == Expr::Col(col) && list.iter().all(|v| v.is_row_independent() && key_compatible(ty, v.data_type(&[]))) {
-                return Some(list.clone());
-            }
+        if let Expr::InList(x, list, false) = c
+            && **x == Expr::Col(col)
+            && list.iter().all(|v| v.is_row_independent() && key_compatible(ty, v.data_type(&[])))
+        {
+            return Some(list.clone());
         }
     }
     None
@@ -175,7 +175,8 @@ fn choose_access(table: &Table, filter: &Option<Expr>, n: f64) -> (Access, f64, 
     }
     let ty = |c: usize| table.columns[c].data_type;
     let log = n.max(2.0).log2();
-    let mut best = (Access::Full, n, n);
+    // A full scan has a fixed cost on top of its rows, so a lookup wins a tie on a tiny table.
+    let mut best = (Access::Full, n, n + 1.0);
     let mut consider = |access: Access, rows: f64, cost: f64| {
         if cost < best.2 {
             best = (access, rows, cost);
@@ -268,11 +269,14 @@ struct Pred {
 /// FROM order, whatever order the joins run in.
 pub fn join(rels: Vec<Plan>, preds: Vec<Expr>) -> Result<Plan> {
     let widths: Vec<usize> = rels.iter().map(|r| r.cols.len()).collect();
-    let offsets: Vec<usize> = widths.iter().scan(0, |acc, w| {
-        let o = *acc;
-        *acc += w;
-        Some(o)
-    }).collect();
+    let offsets: Vec<usize> = widths
+        .iter()
+        .scan(0, |acc, w| {
+            let o = *acc;
+            *acc += w;
+            Some(o)
+        })
+        .collect();
     let layout = Layout { offsets: offsets.clone(), widths: widths.clone() };
     let mut rels: Vec<Option<Plan>> = rels.into_iter().map(Some).collect();
     let mut multi: Vec<Pred> = Vec::new();
@@ -317,7 +321,11 @@ pub fn join(rels: Vec<Plan>, preds: Vec<Expr>) -> Result<Plan> {
     while joined.len() < n {
         let inside: BTreeSet<usize> = joined.iter().copied().collect();
         let connects = |r: usize| {
-            multi.iter().any(|p| p.rels.contains(&r) && p.rels.iter().all(|x| *x == r || inside.contains(x)) && equi_sides(&p.expr, &layout, &inside, r).is_some())
+            multi.iter().any(|p| {
+                p.rels.contains(&r)
+                    && p.rels.iter().all(|x| *x == r || inside.contains(x))
+                    && equi_sides(&p.expr, &layout, &inside, r).is_some()
+            })
         };
         let candidates: Vec<usize> = (0..n).filter(|&r| rels[r].is_some()).collect();
         let next = candidates
@@ -329,7 +337,8 @@ pub fn join(rels: Vec<Plan>, preds: Vec<Expr>) -> Result<Plan> {
             .unwrap();
         let right = rels[next].take().unwrap();
         // Predicates now fully available.
-        let (ready, rest): (Vec<Pred>, Vec<Pred>) = multi.into_iter().partition(|p| p.rels.iter().all(|x| *x == next || inside.contains(x)));
+        let (ready, rest): (Vec<Pred>, Vec<Pred>) =
+            multi.into_iter().partition(|p| p.rels.iter().all(|x| *x == next || inside.contains(x)));
         multi = rest;
         let mut new_joined = joined.clone();
         new_joined.push(next);
@@ -355,7 +364,13 @@ pub fn join(rels: Vec<Plan>, preds: Vec<Expr>) -> Result<Plan> {
     }
     // Back to FROM order.
     let exprs: Vec<Expr> = (0..offsets.last().unwrap() + widths.last().unwrap()).map(|c| Expr::Col(position(&joined, c))).collect();
-    let cols: Vec<Col> = exprs.iter().map(|e| match e { Expr::Col(i) => current.cols[*i].clone(), _ => unreachable!() }).collect();
+    let cols: Vec<Col> = exprs
+        .iter()
+        .map(|e| match e {
+            Expr::Col(i) => current.cols[*i].clone(),
+            _ => unreachable!(),
+        })
+        .collect();
     Ok(project(current, exprs, cols))
 }
 
@@ -387,7 +402,15 @@ fn equi_sides(e: &Expr, layout: &Layout, inside: &BTreeSet<usize>, r: usize) -> 
 /// Joins `left` (row order `order` minus its last entry) with `right` (the last entry). A
 /// hash join builds on the smaller input, which may put the right relation first; `order` is
 /// updated to the row order produced.
-fn make_join(left: Plan, right: Plan, kind: JoinType, lkeys: Vec<Expr>, rkeys: Vec<Expr>, residual: Option<Expr>, order: &mut Vec<usize>) -> Plan {
+fn make_join(
+    left: Plan,
+    right: Plan,
+    kind: JoinType,
+    lkeys: Vec<Expr>,
+    rkeys: Vec<Expr>,
+    residual: Option<Expr>,
+    order: &mut Vec<usize>,
+) -> Plan {
     let lw = left.cols.len();
     let rw = right.cols.len();
     let est_join = if lkeys.is_empty() { left.est * right.est } else { left.est.max(right.est) };
@@ -417,7 +440,12 @@ fn make_join(left: Plan, right: Plan, kind: JoinType, lkeys: Vec<Expr>, rkeys: V
     }
     let cols: Vec<Col> = left.cols.iter().chain(&right.cols).cloned().collect();
     let cost = left.cost + right.cost + left.est + right.est;
-    Plan::new(Node::HashJoin { left: Box::new(left), right: Box::new(right), kind, left_keys: lkeys, right_keys: rkeys, residual }, cols, est, cost)
+    Plan::new(
+        Node::HashJoin { left: Box::new(left), right: Box::new(right), kind, left_keys: lkeys, right_keys: rkeys, residual },
+        cols,
+        est,
+        cost,
+    )
 }
 
 /// A LEFT JOIN of two planned sides; `preds` are over [left columns, right columns].
@@ -462,11 +490,23 @@ pub fn left_join(left: Plan, right: Plan, preds: Vec<Expr>) -> Plan {
     let residual = and_all(residual);
     if lkeys.is_empty() {
         let cost = left.cost + right.cost + left.est * right.est;
-        return Plan::new(Node::NestedLoop { left: Box::new(left), right: Box::new(right), kind: JoinType::Left, on: residual }, cols, est, cost);
+        return Plan::new(
+            Node::NestedLoop { left: Box::new(left), right: Box::new(right), kind: JoinType::Left, on: residual },
+            cols,
+            est,
+            cost,
+        );
     }
     let cost = left.cost + right.cost + left.est + right.est;
     Plan::new(
-        Node::HashJoin { left: Box::new(left), right: Box::new(right), kind: JoinType::Left, left_keys: lkeys, right_keys: rkeys, residual },
+        Node::HashJoin {
+            left: Box::new(left),
+            right: Box::new(right),
+            kind: JoinType::Left,
+            left_keys: lkeys,
+            right_keys: rkeys,
+            residual,
+        },
         cols,
         est,
         cost,

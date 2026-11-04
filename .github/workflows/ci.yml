@@ -1,0 +1,75 @@
+name: CI
+on:
+  push:
+  pull_request:
+
+jobs:
+  engine:
+    name: Engine (Rust)
+    runs-on: ubuntu-latest
+    defaults: { run: { working-directory: engine } }
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with: { components: "clippy, rustfmt" }
+      - uses: Swatinem/rust-cache@v2
+        with: { workspaces: engine }
+      - run: cargo fmt --check
+      - run: cargo clippy --all-targets --features bench -- -D warnings
+      - name: Tests (storage, MVCC, SQL, power-loss simulation, a short crash test)
+        run: cargo test --release
+      - name: sqllogictest, select1-5
+        run: |
+          mkdir -p ../data/slt
+          for f in select1 select2 select3 select4 select5; do
+            curl -fsSL -o ../data/slt/$f.test https://raw.githubusercontent.com/gregrahn/sqllogictest/master/test/$f.test
+          done
+          ./target/release/lodestone slt ../data/slt/*.test | tee slt.log
+          grep -q "total: 10706 / 10706" slt.log
+      - uses: actions/upload-artifact@v4
+        with: { name: lodestone, path: engine/target/release/lodestone }
+
+  server:
+    name: PostgreSQL server (Go) with psql
+    needs: engine
+    runs-on: ubuntu-latest
+    defaults: { run: { working-directory: server } }
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with: { name: lodestone, path: bin }
+      - run: chmod +x ../bin/lodestone
+      - uses: actions/setup-go@v5
+        with: { go-version-file: server/go.mod, cache-dependency-path: server/go.sum }
+      - run: test -z "$(gofmt -l .)" || { gofmt -l .; exit 1; }
+      - run: go vet ./...
+      - name: Tests, with pgx against the real engine
+        run: |
+          LODESTONE_BIN=$PWD/../bin/lodestone go test -v ./... 2>&1 | tee test.log
+          test ${PIPESTATUS[0]} -eq 0
+          grep -q -- "--- PASS: TestWithPgx" test.log
+        shell: bash
+      - name: psql
+        run: |
+          go build -o ../bin/lodestone-pg ./cmd/lodestone-pg
+          ../bin/lodestone-pg --engine-bin ../bin/lodestone --db /tmp/ci.db --http "" &
+          for i in $(seq 1 50); do pg_isready -h 127.0.0.1 -p 5433 && break; sleep 0.2; done
+          export PGHOST=127.0.0.1 PGPORT=5433 PGUSER=ci PGDATABASE=lodestone
+          psql -v ON_ERROR_STOP=1 -c "CREATE TABLE t (id INTEGER PRIMARY KEY, name TEXT)" \
+               -c "INSERT INTO t VALUES (1, 'one'), (2, 'two')" \
+               -c "SELECT name FROM t WHERE id = 2" | tee psql.log
+          grep -q " two" psql.log
+          ! psql -v ON_ERROR_STOP=1 -c "INSERT INTO t VALUES (1, 'dup')" 2> err.log
+          grep -q "duplicate key" err.log
+
+  web:
+    name: Plan viewer (TypeScript)
+    runs-on: ubuntu-latest
+    defaults: { run: { working-directory: web } }
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: 24, cache: npm, cache-dependency-path: web/package-lock.json }
+      - run: npm ci
+      - run: npm test
+      - run: npm run build

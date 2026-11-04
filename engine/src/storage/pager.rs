@@ -135,8 +135,7 @@ impl Pager {
 
     /// Writes every changed page to the log as one durable commit.
     pub fn commit(&mut self) -> io::Result<()> {
-        let mut pages: Vec<(PageId, Vec<u8>)> =
-            self.cache.iter().filter(|(_, s)| s.dirty).map(|(&id, s)| (id, s.node.encode())).collect();
+        let mut pages: Vec<(PageId, Vec<u8>)> = self.cache.iter().filter(|(_, s)| s.dirty).map(|(&id, s)| (id, s.node.encode())).collect();
         if pages.is_empty() {
             return Ok(());
         }

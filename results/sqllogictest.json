@@ -1,0 +1,102 @@
+{
+  "files": 45,
+  "records": 289373,
+  "passed": 288871,
+  "failed": 502,
+  "pass_rate": 0.99827,
+  "skipped_records": 58732,
+  "skipped_note": "records guarded by onlyif <another engine>: results only SQLite, MySQL, ... give",
+  "groups": {
+    "evidence": {
+      "files": 12,
+      "records": 324,
+      "passed": 291,
+      "skipped": 95
+    },
+    "index/between": {
+      "files": 1,
+      "records": 10033,
+      "passed": 10033,
+      "skipped": 0
+    },
+    "index/commute": {
+      "files": 1,
+      "records": 10034,
+      "passed": 10034,
+      "skipped": 0
+    },
+    "index/delete": {
+      "files": 1,
+      "records": 10730,
+      "passed": 10730,
+      "skipped": 0
+    },
+    "index/in": {
+      "files": 1,
+      "records": 10035,
+      "passed": 10035,
+      "skipped": 0
+    },
+    "index/orderby": {
+      "files": 1,
+      "records": 10053,
+      "passed": 10053,
+      "skipped": 0
+    },
+    "index/orderby_nosort": {
+      "files": 1,
+      "records": 10053,
+      "passed": 10053,
+      "skipped": 0
+    },
+    "index/random": {
+      "files": 1,
+      "records": 10032,
+      "passed": 10032,
+      "skipped": 2140
+    },
+    "index/view": {
+      "files": 1,
+      "records": 7135,
+      "passed": 7135,
+      "skipped": 1065
+    },
+    "random/aggregates": {
+      "files": 5,
+      "records": 50060,
+      "passed": 50058,
+      "skipped": 19874
+    },
+    "random/expr": {
+      "files": 5,
+      "records": 50060,
+      "passed": 50052,
+      "skipped": 25354
+    },
+    "random/groupby": {
+      "files": 5,
+      "records": 50060,
+      "passed": 49601,
+      "skipped": 3554
+    },
+    "random/select": {
+      "files": 5,
+      "records": 50058,
+      "passed": 50058,
+      "skipped": 6650
+    },
+    "select1-5": {
+      "files": 5,
+      "records": 10706,
+      "passed": 10706,
+      "skipped": 0
+    }
+  },
+  "failure_categories": {
+    "bare column outside GROUP BY: SQLite allows it, PostgreSQL (and Lodestone) reject it": 457,
+    "CREATE/DROP TRIGGER: not supported": 23,
+    "division by zero: SQLite gives NULL, PostgreSQL (and Lodestone) an error": 12,
+    "INSERT OR REPLACE / REPLACE INTO: not supported (and the queries that read its rows)": 8,
+    "blob literal x'...': no BLOB type": 2
+  }
+}

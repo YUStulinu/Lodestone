@@ -114,30 +114,94 @@ pub enum Access {
     /// Primary key lookups, one tuple of values each.
     Keys(Vec<Vec<Expr>>),
     /// A range of a single-column primary key: (value, inclusive).
-    KeyRange { lo: Option<(Expr, bool)>, hi: Option<(Expr, bool)> },
+    KeyRange {
+        lo: Option<(Expr, bool)>,
+        hi: Option<(Expr, bool)>,
+    },
     /// Index lookups on a prefix of the index's columns.
-    IndexEq { index: usize, keys: Vec<Vec<Expr>> },
+    IndexEq {
+        index: usize,
+        keys: Vec<Vec<Expr>>,
+    },
     /// A range on an index's first column.
-    IndexRange { index: usize, lo: Option<(Expr, bool)>, hi: Option<(Expr, bool)> },
+    IndexRange {
+        index: usize,
+        lo: Option<(Expr, bool)>,
+        hi: Option<(Expr, bool)>,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum Node {
     /// `rows`: the table's estimated size.
-    Scan { table: Rc<Table>, alias: String, access: Access, filter: Option<Expr>, rows: f64 },
-    Values { rows: Vec<Vec<Expr>> },
-    Filter { input: Box<Plan>, pred: Expr },
-    Project { input: Box<Plan>, exprs: Vec<Expr> },
-    NestedLoop { left: Box<Plan>, right: Box<Plan>, kind: JoinType, on: Option<Expr> },
-    HashJoin { left: Box<Plan>, right: Box<Plan>, kind: JoinType, left_keys: Vec<Expr>, right_keys: Vec<Expr>, residual: Option<Expr> },
-    Aggregate { input: Box<Plan>, group: Vec<Expr>, aggs: Vec<Agg> },
-    Sort { input: Box<Plan>, keys: Vec<SortKey> },
-    Limit { input: Box<Plan>, limit: Option<Expr>, offset: Option<Expr> },
-    Distinct { input: Box<Plan> },
-    SetOp { op: SetOp, all: bool, left: Box<Plan>, right: Box<Plan> },
-    Insert { table: Rc<Table>, input: Box<Plan> },
-    Update { table: Rc<Table>, input: Box<Plan>, set: Vec<(usize, Expr)> },
-    Delete { table: Rc<Table>, input: Box<Plan> },
+    Scan {
+        table: Rc<Table>,
+        alias: String,
+        access: Access,
+        filter: Option<Expr>,
+        rows: f64,
+    },
+    Values {
+        rows: Vec<Vec<Expr>>,
+    },
+    Filter {
+        input: Box<Plan>,
+        pred: Expr,
+    },
+    Project {
+        input: Box<Plan>,
+        exprs: Vec<Expr>,
+    },
+    NestedLoop {
+        left: Box<Plan>,
+        right: Box<Plan>,
+        kind: JoinType,
+        on: Option<Expr>,
+    },
+    HashJoin {
+        left: Box<Plan>,
+        right: Box<Plan>,
+        kind: JoinType,
+        left_keys: Vec<Expr>,
+        right_keys: Vec<Expr>,
+        residual: Option<Expr>,
+    },
+    Aggregate {
+        input: Box<Plan>,
+        group: Vec<Expr>,
+        aggs: Vec<Agg>,
+    },
+    Sort {
+        input: Box<Plan>,
+        keys: Vec<SortKey>,
+    },
+    Limit {
+        input: Box<Plan>,
+        limit: Option<Expr>,
+        offset: Option<Expr>,
+    },
+    Distinct {
+        input: Box<Plan>,
+    },
+    SetOp {
+        op: SetOp,
+        all: bool,
+        left: Box<Plan>,
+        right: Box<Plan>,
+    },
+    Insert {
+        table: Rc<Table>,
+        input: Box<Plan>,
+    },
+    Update {
+        table: Rc<Table>,
+        input: Box<Plan>,
+        set: Vec<(usize, Expr)>,
+    },
+    Delete {
+        table: Rc<Table>,
+        input: Box<Plan>,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -413,15 +477,13 @@ impl Expr {
             Expr::Not(_) | Expr::InList(..) | Expr::Like(..) | Expr::IsNull(..) => Some(Bool),
             Expr::Bin(op, a, b) => match op {
                 BinOp::Concat => Some(Text),
-                BinOp::Add | BinOp::Sub | BinOp::Mul | BinOp::Div | BinOp::Mod => {
-                    match (a.data_type(cols), b.data_type(cols)) {
-                        (Some(Float), _) | (_, Some(Float)) => Some(Float),
-                        (Some(Int), Some(Int)) => Some(Int),
-                        (Some(Int), None) | (None, Some(Int)) => Some(Int),
-                        (x, None) | (None, x) => x,
-                        _ => Some(Float),
-                    }
-                }
+                BinOp::Add | BinOp::Sub | BinOp::Mul | BinOp::Div | BinOp::Mod => match (a.data_type(cols), b.data_type(cols)) {
+                    (Some(Float), _) | (_, Some(Float)) => Some(Float),
+                    (Some(Int), Some(Int)) => Some(Int),
+                    (Some(Int), None) | (None, Some(Int)) => Some(Int),
+                    (x, None) | (None, x) => x,
+                    _ => Some(Float),
+                },
                 _ => Some(Bool),
             },
             Expr::Func(f, args) => match f {
@@ -429,11 +491,7 @@ impl Expr {
                 Func::Length => Some(Int),
                 Func::Coalesce | Func::NullIf | Func::Least | Func::Greatest => {
                     let tys: Vec<_> = args.iter().filter_map(|a| a.data_type(cols)).collect();
-                    if tys.contains(&Float) && tys.iter().all(|t| *t == Int || *t == Float) {
-                        Some(Float)
-                    } else {
-                        tys.first().copied()
-                    }
+                    if tys.contains(&Float) && tys.iter().all(|t| *t == Int || *t == Float) { Some(Float) } else { tys.first().copied() }
                 }
                 _ => Some(Text),
             },
@@ -652,7 +710,11 @@ impl<'a> Binder<'a> {
                 SelectItem::QualifiedWildcard(t) => {
                     let before = items.len();
                     items.extend(
-                        scope.iter().enumerate().filter(|(_, c)| c.table.as_deref() == Some(t)).map(|(i, c)| (Expr::Col(i), c.name.clone())),
+                        scope
+                            .iter()
+                            .enumerate()
+                            .filter(|(_, c)| c.table.as_deref() == Some(t))
+                            .map(|(i, c)| (Expr::Col(i), c.name.clone())),
                     );
                     if items.len() == before {
                         return err!("42P01", "missing FROM-clause entry for table \"{t}\"");
@@ -670,12 +732,10 @@ impl<'a> Binder<'a> {
             // GROUP BY may name an output column or position.
             let e = match g {
                 ast::Expr::Literal(Value::Int(n)) if *n >= 1 && (*n as usize) <= items.len() => items[*n as usize - 1].0.clone(),
-                ast::Expr::Column(None, name) if self.resolve(None, name).is_err() => {
-                    match items.iter().find(|(_, n)| n == name) {
-                        Some((e, _)) => e.clone(),
-                        None => self.expr(g, &mut AggCtx { aggs: vec![], allowed: false })?,
-                    }
-                }
+                ast::Expr::Column(None, name) if self.resolve(None, name).is_err() => match items.iter().find(|(_, n)| n == name) {
+                    Some((e, _)) => e.clone(),
+                    None => self.expr(g, &mut AggCtx { aggs: vec![], allowed: false })?,
+                },
                 _ => self.expr(g, &mut AggCtx { aggs: vec![], allowed: false })?,
             };
             if contains_agg(&e) {
@@ -728,10 +788,17 @@ impl<'a> Binder<'a> {
             let g = group.len();
             let mut cols: Vec<Col> = group
                 .iter()
-                .map(|e| Col { table: match e { Expr::Col(i) => scope[*i].table.clone(), _ => None }, name: match e {
-                    Expr::Col(i) => scope[*i].name.clone(),
-                    _ => "?column?".into(),
-                }, ty: e.data_type(&scope) })
+                .map(|e| Col {
+                    table: match e {
+                        Expr::Col(i) => scope[*i].table.clone(),
+                        _ => None,
+                    },
+                    name: match e {
+                        Expr::Col(i) => scope[*i].name.clone(),
+                        _ => "?column?".into(),
+                    },
+                    ty: e.data_type(&scope),
+                })
                 .collect();
             for a in &aggs {
                 let ty = match (a.func, a.arg.as_ref().and_then(|x| x.data_type(&scope))) {
@@ -836,7 +903,13 @@ impl<'a> Binder<'a> {
                 if *kind == JoinKind::Right {
                     // Put the columns back in the order they were written.
                     let exprs: Vec<Expr> = (lw..lw + rw).chain(0..lw).map(Expr::Col).collect();
-                    let cols = exprs.iter().map(|e| match e { Expr::Col(i) => plan.cols[*i].clone(), _ => unreachable!() }).collect();
+                    let cols = exprs
+                        .iter()
+                        .map(|e| match e {
+                            Expr::Col(i) => plan.cols[*i].clone(),
+                            _ => unreachable!(),
+                        })
+                        .collect();
                     plan = optimize::project(plan, exprs, cols);
                 }
                 rels.push(plan);
@@ -873,7 +946,8 @@ impl<'a> Binder<'a> {
                 if let Some(t) = catalog::get_table(self.txn, name)? {
                     let alias = alias.clone().unwrap_or_else(|| name.clone());
                     let est = self.rows_estimate(&t);
-                    let cols = t.columns.iter().map(|c| Col { table: Some(alias.clone()), name: c.name.clone(), ty: Some(c.data_type) }).collect();
+                    let cols =
+                        t.columns.iter().map(|c| Col { table: Some(alias.clone()), name: c.name.clone(), ty: Some(c.data_type) }).collect();
                     let node = Node::Scan { table: Rc::new(t), alias, access: Access::Full, filter: None, rows: est };
                     return Ok(Plan::new(node, cols, est, est));
                 }
@@ -1071,7 +1145,9 @@ impl<'a> Binder<'a> {
                 names
                     .iter()
                     .map(|n| {
-                        let i = t.column(n).ok_or_else(|| Error::new("42703", format!("column \"{n}\" of relation \"{table}\" does not exist")))?;
+                        let i = t
+                            .column(n)
+                            .ok_or_else(|| Error::new("42703", format!("column \"{n}\" of relation \"{table}\" does not exist")))?;
                         if !seen.insert(i) {
                             return err!("42701", "column \"{n}\" specified more than once");
                         }
@@ -1130,7 +1206,8 @@ impl<'a> Binder<'a> {
             let (t, scan) = self.target_scan(table, alias, filter)?;
             let mut assignments = Vec::new();
             for (col, e) in set {
-                let i = t.column(col).ok_or_else(|| Error::new("42703", format!("column \"{col}\" of relation \"{table}\" does not exist")))?;
+                let i =
+                    t.column(col).ok_or_else(|| Error::new("42703", format!("column \"{col}\" of relation \"{table}\" does not exist")))?;
                 assignments.push((i, self.expr(e, &mut AggCtx { aggs: vec![], allowed: false })?));
             }
             let (est, cost) = (scan.est, scan.cost + scan.est);
@@ -1239,13 +1316,18 @@ fn over_groups(e: &mut Expr, group: &[Expr], g: usize, scope: &[Col]) -> Result<
                     usize::MAX
                 }
             };
-            let cell = std::cell::RefCell::new(map);
-            let f = |i: usize| (cell.borrow_mut())(i);
             let mut s = (**sp).clone();
-            s.plan.remap_outer(1, &f);
-            drop(cell);
+            {
+                let cell = std::cell::RefCell::new(map);
+                let f = |i: usize| (cell.borrow_mut())(i);
+                s.plan.remap_outer(1, &f);
+            }
             if let Some(i) = bad {
-                return err!("42803", "column \"{}\" must appear in the GROUP BY clause or be used in an aggregate function", scope[i].name);
+                return err!(
+                    "42803",
+                    "column \"{}\" must appear in the GROUP BY clause or be used in an aggregate function",
+                    scope[i].name
+                );
             }
             *sp = Rc::new(s);
         }
@@ -1266,8 +1348,14 @@ fn using_conditions(using: &[String], left: &[Col], right: &[Col]) -> Result<Vec
     using
         .iter()
         .map(|c| {
-            let l = left.iter().find(|x| &x.name == c).ok_or_else(|| Error::new("42703", format!("column \"{c}\" specified in USING clause does not exist in left table")))?;
-            let r = right.iter().find(|x| &x.name == c).ok_or_else(|| Error::new("42703", format!("column \"{c}\" specified in USING clause does not exist in right table")))?;
+            let l = left
+                .iter()
+                .find(|x| &x.name == c)
+                .ok_or_else(|| Error::new("42703", format!("column \"{c}\" specified in USING clause does not exist in left table")))?;
+            let r = right
+                .iter()
+                .find(|x| &x.name == c)
+                .ok_or_else(|| Error::new("42703", format!("column \"{c}\" specified in USING clause does not exist in right table")))?;
             Ok(ast::Expr::Binary(
                 BinOp::Eq,
                 Box::new(ast::Expr::Column(l.table.clone(), c.clone())),

@@ -11,7 +11,7 @@ use super::exec::{self, Ctx, build, eval_const};
 use super::explain;
 use super::lexer::{Token, lex};
 use super::parser;
-use super::plan::{Binder, Node, Plan};
+use super::plan::{Binder, Expr, Node, Plan};
 use super::types::{DataType, Error, Result, Row, Value, err};
 use crate::mvcc::{Mvcc, Range, Transaction};
 use crate::storage::Options;
@@ -123,10 +123,19 @@ impl Session {
         (out, None)
     }
 
-    /// The columns a query would return, without running it (for the wire protocol's Describe).
-    pub fn describe(&mut self, sql: &str) -> Result<Vec<Column>> {
+    /// The columns a statement would return and the types its parameters take from their
+    /// context (`id = $1` gives $1 the type of id), without running it -- for the wire
+    /// protocol's Describe. Parameters with no telling context are left untyped (None).
+    pub fn describe(&mut self, sql: &str) -> Result<(Vec<Column>, Vec<Option<DataType>>)> {
         let stmts = parser::parse(sql)?;
-        let Some(Statement::Select(q)) = stmts.first() else { return Ok(vec![]) };
+        let n = param_count(sql);
+        let Some(stmt) = stmts.first() else { return Ok((vec![], vec![None; n])) };
+        let text = |name: &str| vec![Column { name: name.into(), ty: DataType::Text }];
+        let (stmt, fixed) = match stmt {
+            Statement::Explain { statement, .. } => (&**statement, Some(text("QUERY PLAN"))),
+            Statement::ShowTables => return Ok((text("table"), vec![])),
+            s => (s, None),
+        };
         let fresh;
         let txn = match &self.txn {
             Some(t) => t,
@@ -135,8 +144,15 @@ impl Session {
                 &fresh
             }
         };
-        let plan = Binder::new(txn, &self.db.mvcc).query(q, false)?;
-        Ok(columns(&plan))
+        let Some(plan) = plan_of(&self.db.mvcc, txn, stmt)? else { return Ok((fixed.unwrap_or_default(), vec![None; n])) };
+        let mut types = vec![None; n];
+        infer_params(&plan, &mut types);
+        let cols = match fixed {
+            Some(c) => c,
+            None if matches!(stmt, Statement::Select(_)) => columns(&plan),
+            None => vec![],
+        };
+        Ok((cols, types))
     }
 
     pub fn statement(&mut self, s: &Statement, params: &[Value]) -> Result<Output> {
@@ -176,7 +192,11 @@ impl Session {
         }
         match s {
             Statement::Vacuum | Statement::Checkpoint if self.txn.is_some() => {
-                return err!("25001", "{} cannot run inside a transaction block", if matches!(s, Statement::Vacuum) { "VACUUM" } else { "CHECKPOINT" });
+                return err!(
+                    "25001",
+                    "{} cannot run inside a transaction block",
+                    if matches!(s, Statement::Vacuum) { "VACUUM" } else { "CHECKPOINT" }
+                );
             }
             Statement::Vacuum => {
                 self.db.mvcc.vacuum()?;
@@ -206,6 +226,86 @@ impl Session {
                 Err(e)
             }
         }
+    }
+}
+
+fn set_param(types: &mut [Option<DataType>], e: &Expr, ty: Option<DataType>) {
+    if let (Expr::Param(n), Some(t)) = (e, ty)
+        && let Some(slot) = types.get_mut(n - 1)
+    {
+        slot.get_or_insert(t);
+    }
+}
+
+/// Gives parameters the types of what they are compared with, assigned to or stored in.
+fn infer_expr(e: &Expr, cols: &[super::plan::Col], types: &mut [Option<DataType>]) {
+    match e {
+        Expr::Bin(_, a, b) => {
+            set_param(types, a, b.data_type(cols));
+            set_param(types, b, a.data_type(cols));
+        }
+        Expr::InList(x, list, _) => {
+            for item in list {
+                set_param(types, item, x.data_type(cols));
+            }
+        }
+        Expr::Sub(sp, left) => {
+            if let Some(l) = left {
+                set_param(types, l, sp.plan.cols.first().and_then(|c| c.ty));
+            }
+            infer_params(&sp.plan, types);
+        }
+        _ => {}
+    }
+    for c in e.children() {
+        infer_expr(c, cols, types);
+    }
+}
+
+fn infer_params(plan: &Plan, types: &mut [Option<DataType>]) {
+    let input_cols = plan.children().first().map(|c| c.cols.clone()).unwrap_or_default();
+    match &plan.node {
+        Node::Insert { table, input } => {
+            // INSERT ... VALUES ($1, ...): each parameter takes its column's type. The VALUES
+            // rows sit under a projection onto the table's columns, unless that is the identity.
+            let (values, map): (&Plan, Vec<(usize, usize)>) = match &input.node {
+                Node::Project { input: v, exprs } => {
+                    (v, exprs.iter().enumerate().filter_map(|(c, e)| if let Expr::Col(j) = e { Some((c, *j)) } else { None }).collect())
+                }
+                _ => (input, (0..table.columns.len()).map(|c| (c, c)).collect()),
+            };
+            if let Node::Values { rows } = &values.node {
+                for (c, j) in map {
+                    for row in rows {
+                        if let Some(e) = row.get(j) {
+                            set_param(types, e, Some(table.columns[c].data_type));
+                        }
+                    }
+                }
+            }
+        }
+        Node::Update { table, set, .. } => {
+            for (c, e) in set {
+                set_param(types, e, Some(table.columns[*c].data_type));
+            }
+        }
+        Node::Limit { limit, offset, .. } => {
+            for e in limit.iter().chain(offset) {
+                set_param(types, e, Some(DataType::Int));
+            }
+        }
+        _ => {}
+    }
+    let cols = match &plan.node {
+        Node::Scan { .. } | Node::NestedLoop { .. } | Node::HashJoin { .. } => plan.cols.clone(),
+        _ => input_cols,
+    };
+    let mut copy = plan.clone();
+    for e in copy.exprs_mut() {
+        infer_expr(e, &cols, types);
+    }
+    for c in plan.children() {
+        infer_params(c, types);
     }
 }
 
@@ -370,7 +470,16 @@ fn run(mvcc: &Mvcc, txn: &Transaction, s: &Statement, params: &[Value]) -> Resul
             let rows = catalog::tables(txn)?.into_iter().map(|t| vec![Value::Text(t.name)]).collect();
             Ok(Output::Rows { columns: vec![Column { name: "table".into(), ty: DataType::Text }], rows })
         }
-        Statement::Reindex => Ok(Output::Command("REINDEX".into())),
+        Statement::Reindex(name) => {
+            // Indexes are kept up to date as rows change; there is nothing to rebuild.
+            if let Some(n) = name {
+                let all = catalog::tables(txn)?;
+                if !all.iter().any(|t| &t.name == n || t.indexes.iter().any(|i| &i.name == n)) {
+                    return err!("42704", "index or table \"{n}\" does not exist");
+                }
+            }
+            Ok(Output::Command("REINDEX".into()))
+        }
         _ => err!("XX000", "unexpected statement"),
     }
 }
@@ -392,7 +501,9 @@ fn create_table(mvcc: &Mvcc, txn: &Transaction, name: &str, defs: &[ast::ColumnD
         columns.push(CatColumn { name: d.name.clone(), data_type: d.data_type, nullable: d.nullable, default });
     }
     let names: Vec<String> = columns.iter().map(|c: &CatColumn| c.name.clone()).collect();
-    let index_of = |n: &String| names.iter().position(|c| c == n).ok_or_else(|| Error::new("42703", format!("column \"{n}\" named in key does not exist")));
+    let index_of = |n: &String| {
+        names.iter().position(|c| c == n).ok_or_else(|| Error::new("42703", format!("column \"{n}\" named in key does not exist")))
+    };
     let inline: Vec<usize> = defs.iter().enumerate().filter(|(_, d)| d.primary_key).map(|(i, _)| i).collect();
     if !inline.is_empty() && !pk.is_empty() || inline.len() > 1 {
         return err!("42P16", "multiple primary keys for table \"{name}\" are not allowed");

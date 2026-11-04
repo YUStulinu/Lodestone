@@ -1,8 +1,8 @@
 engine/target/
 /data/
-/third_party/
+/bin/
 node_modules/
-dist/
+web/dist/
 *.db
 *.db-wal
 __pycache__/

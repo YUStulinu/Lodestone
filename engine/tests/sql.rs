@@ -65,7 +65,10 @@ fn queries() {
     assert_eq!(flat(q(&mut s, "SELECT e.name, d.name FROM emp e RIGHT JOIN dept d ON e.dept = d.id WHERE d.id = 3")), "NULL,empty");
     // Aggregates.
     assert_eq!(
-        flat(q(&mut s, "SELECT dept, count(*), sum(salary), avg(salary), min(name), max(salary) FROM emp GROUP BY dept ORDER BY dept NULLS FIRST")),
+        flat(q(
+            &mut s,
+            "SELECT dept, count(*), sum(salary), avg(salary), min(name), max(salary) FROM emp GROUP BY dept ORDER BY dept NULLS FIRST"
+        )),
         "NULL,1,50,50,ed,50 | 1,2,180,90,ada,100 | 2,2,145,72.5,cy,75"
     );
     assert_eq!(flat(q(&mut s, "SELECT count(*), count(dept), count(DISTINCT dept) FROM emp")), "5,4,2");

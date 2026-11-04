@@ -21,7 +21,7 @@ pub enum Statement {
     Vacuum,
     Checkpoint,
     ShowTables,
-    Reindex,
+    Reindex(Option<String>),
 }
 
 #[derive(Debug, Clone, PartialEq)]

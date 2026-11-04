@@ -16,9 +16,8 @@ pub enum Token {
     Sym(&'static str),
 }
 
-const SYMBOLS: [&str; 22] = [
-    "<>", "<=", ">=", "!=", "||", "::", "==", "(", ")", ",", ";", "+", "-", "*", "/", "%", "=", "<", ">", ".", "~", "&",
-];
+const SYMBOLS: [&str; 22] =
+    ["<>", "<=", ">=", "!=", "||", "::", "==", "(", ")", ",", ";", "+", "-", "*", "/", "%", "=", "<", ">", ".", "~", "&"];
 
 pub fn lex(sql: &str) -> Result<Vec<Token>> {
     Ok(lex_with_pos(sql)?.into_iter().map(|(t, _)| t).collect())

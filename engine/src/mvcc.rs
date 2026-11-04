@@ -316,10 +316,10 @@ impl Transaction {
         let mut found = None;
         st.scan(Bound::Included(&from), Bound::Included(&to), |_k, v| {
             // Versions come oldest first; remember the newest visible one.
-            if let Some((_, ver)) = decode_version_key(_k) {
-                if self.visible(ver) {
-                    found = Some(v.to_vec());
-                }
+            if let Some((_, ver)) = decode_version_key(_k)
+                && self.visible(ver)
+            {
+                found = Some(v.to_vec());
             }
             true
         })?;
@@ -342,19 +342,15 @@ impl Transaction {
         // Any version we cannot see, from the oldest transaction we might not see on, is a conflict.
         let from = self.active.iter().copied().min().unwrap_or(self.version + 1).min(self.version + 1);
         let mut conflict = false;
-        st.scan(
-            Bound::Included(&version_key(key, from)),
-            Bound::Included(&version_key(key, u64::MAX)),
-            |k, _| {
-                if let Some((_, v)) = decode_version_key(k) {
-                    if !self.visible(v) {
-                        conflict = true;
-                        return false;
-                    }
-                }
-                true
-            },
-        )?;
+        st.scan(Bound::Included(&version_key(key, from)), Bound::Included(&version_key(key, u64::MAX)), |k, _| {
+            if let Some((_, v)) = decode_version_key(k)
+                && !self.visible(v)
+            {
+                conflict = true;
+                return false;
+            }
+            true
+        })?;
         if conflict {
             return Err(Error::Serialization);
         }
@@ -419,12 +415,12 @@ impl Transaction {
         let mut st = self.lock();
         st.scan(from, to, |k, v| {
             let Some((key, ver)) = decode_version_key(k) else { return true };
-            if current.as_ref().is_some_and(|(c, _)| *c != key) {
-                if let Some((ck, Some(cv))) = current.take() {
-                    out.push((ck[plen..].to_vec(), cv));
-                    if out.len() >= limit {
-                        return false;
-                    }
+            if current.as_ref().is_some_and(|(c, _)| *c != key)
+                && let Some((ck, Some(cv))) = current.take()
+            {
+                out.push((ck[plen..].to_vec(), cv));
+                if out.len() >= limit {
+                    return false;
                 }
             }
             if current.is_none() {
@@ -436,10 +432,10 @@ impl Transaction {
             }
             true
         })?;
-        if out.len() < limit {
-            if let Some((ck, Some(cv))) = current {
-                out.push((ck[plen..].to_vec(), cv));
-            }
+        if out.len() < limit
+            && let Some((ck, Some(cv))) = current
+        {
+            out.push((ck[plen..].to_vec(), cv));
         }
         Ok(out)
     }

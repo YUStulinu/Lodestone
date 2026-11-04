@@ -57,6 +57,52 @@ fn named(kind: u8, name: &str) -> Vec<u8> {
     k
 }
 
+/// Definitions can outgrow one B+tree entry, so they are stored in chunks:
+/// `key 0x00 chunk_no(u16)`. Names never contain 0x00, so one name's chunks are contiguous.
+const CHUNK: usize = 700;
+
+fn chunk_key(key: &[u8], i: u16) -> Vec<u8> {
+    let mut k = key.to_vec();
+    k.push(0);
+    k.extend_from_slice(&i.to_be_bytes());
+    k
+}
+
+fn get_blob(txn: &Transaction, key: &[u8]) -> Result<Option<Vec<u8>>> {
+    let mut prefix = key.to_vec();
+    prefix.push(0);
+    let range = Range { prefix: &prefix, from: std::ops::Bound::Unbounded, to: std::ops::Bound::Unbounded };
+    let parts = txn.scan(&range, usize::MAX)?;
+    if parts.is_empty() {
+        return Ok(None);
+    }
+    Ok(Some(parts.into_iter().flat_map(|(_, v)| v).collect()))
+}
+
+fn put_blob(txn: &Transaction, key: &[u8], data: &[u8]) -> Result<()> {
+    let old = get_blob(txn, key)?.map_or(0, |b| b.len().div_ceil(CHUNK).max(1));
+    let chunks: Vec<&[u8]> = if data.is_empty() { vec![&[]] } else { data.chunks(CHUNK).collect() };
+    for (i, c) in chunks.iter().enumerate() {
+        txn.set(&chunk_key(key, i as u16), c)?;
+    }
+    for i in chunks.len()..old {
+        txn.delete(&chunk_key(key, i as u16))?;
+    }
+    Ok(())
+}
+
+fn delete_blob(txn: &Transaction, key: &[u8]) -> Result<()> {
+    let n = get_blob(txn, key)?.map_or(0, |b| b.len().div_ceil(CHUNK).max(1));
+    for i in 0..n {
+        txn.delete(&chunk_key(key, i as u16))?;
+    }
+    Ok(())
+}
+
+fn parse<T: serde::de::DeserializeOwned>(b: &[u8]) -> Result<T> {
+    serde_json::from_slice(b).map_err(|e| Error::new("XX001", format!("corrupt catalog: {e}")))
+}
+
 pub fn row_prefix(table_id: u32) -> Vec<u8> {
     let mut k = vec![ROW];
     k.extend_from_slice(&table_id.to_be_bytes());
@@ -102,10 +148,7 @@ impl Table {
 }
 
 pub fn get_table(txn: &Transaction, name: &str) -> Result<Option<Table>> {
-    match txn.get(&named(TABLE, name))? {
-        None => Ok(None),
-        Some(b) => serde_json::from_slice(&b).map(Some).map_err(|e| Error::new("XX001", format!("corrupt catalog: {e}"))),
-    }
+    get_blob(txn, &named(TABLE, name))?.map(|b| parse(&b)).transpose()
 }
 
 pub fn table(txn: &Transaction, name: &str) -> Result<Table> {
@@ -113,38 +156,37 @@ pub fn table(txn: &Transaction, name: &str) -> Result<Table> {
 }
 
 pub fn put_table(txn: &Transaction, t: &Table) -> Result<()> {
-    txn.set(&named(TABLE, &t.name), &serde_json::to_vec(t).unwrap())?;
-    Ok(())
+    put_blob(txn, &named(TABLE, &t.name), &serde_json::to_vec(t).unwrap())
 }
 
 pub fn delete_table(txn: &Transaction, name: &str) -> Result<()> {
-    txn.delete(&named(TABLE, name))?;
-    Ok(())
+    delete_blob(txn, &named(TABLE, name))
 }
 
 pub fn tables(txn: &Transaction) -> Result<Vec<Table>> {
     let range = Range { prefix: &[TABLE], from: std::ops::Bound::Unbounded, to: std::ops::Bound::Unbounded };
-    txn.scan(&range, usize::MAX)?
-        .into_iter()
-        .map(|(_, v)| serde_json::from_slice(&v).map_err(|e| Error::new("XX001", format!("corrupt catalog: {e}"))))
-        .collect()
+    // Group the chunks by name (the bytes before the 0x00).
+    let mut out: Vec<(Vec<u8>, Vec<u8>)> = Vec::new();
+    for (k, v) in txn.scan(&range, usize::MAX)? {
+        let name = k[..k.iter().position(|&b| b == 0).unwrap_or(k.len())].to_vec();
+        match out.last_mut() {
+            Some((n, data)) if *n == name => data.extend_from_slice(&v),
+            _ => out.push((name, v)),
+        }
+    }
+    out.into_iter().map(|(_, b)| parse(&b)).collect()
 }
 
 pub fn get_view(txn: &Transaction, name: &str) -> Result<Option<View>> {
-    match txn.get(&named(VIEW, name))? {
-        None => Ok(None),
-        Some(b) => serde_json::from_slice(&b).map(Some).map_err(|e| Error::new("XX001", format!("corrupt catalog: {e}"))),
-    }
+    get_blob(txn, &named(VIEW, name))?.map(|b| parse(&b)).transpose()
 }
 
 pub fn put_view(txn: &Transaction, v: &View) -> Result<()> {
-    txn.set(&named(VIEW, &v.name), &serde_json::to_vec(v).unwrap())?;
-    Ok(())
+    put_blob(txn, &named(VIEW, &v.name), &serde_json::to_vec(v).unwrap())
 }
 
 pub fn delete_view(txn: &Transaction, name: &str) -> Result<()> {
-    txn.delete(&named(VIEW, name))?;
-    Ok(())
+    delete_blob(txn, &named(VIEW, name))
 }
 
 /// Checks a row against the table's columns: converts each value to its column's type and
@@ -155,7 +197,12 @@ pub fn conform(table: &Table, row: Row) -> Result<Row> {
         .map(|(v, c)| {
             if v.is_null() {
                 if !c.nullable {
-                    return err!("23502", "null value in column \"{}\" of relation \"{}\" violates not-null constraint", c.name, table.name);
+                    return err!(
+                        "23502",
+                        "null value in column \"{}\" of relation \"{}\" violates not-null constraint",
+                        c.name,
+                        table.name
+                    );
                 }
                 return Ok(Value::Null);
             }

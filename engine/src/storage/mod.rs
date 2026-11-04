@@ -11,8 +11,8 @@ use std::io;
 use std::ops::Bound;
 use std::path::Path;
 
-pub use pager::{Options, Stats};
 use pager::Pager;
+pub use pager::{Options, Stats};
 use vfs::Vfs;
 
 pub struct Storage {
