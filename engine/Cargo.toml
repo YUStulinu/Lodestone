@@ -1,0 +1,29 @@
+[package]
+name = "lodestone"
+version = "0.1.0"
+edition = "2024"
+description = "A SQL database written from scratch: B+tree, WAL, MVCC, SQL"
+license = "MIT"
+
+[dependencies]
+crc32fast = "1.5.4"
+fastrand = "2.5.0"
+md-5 = "0.11.0"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1.0.154"
+rusqlite = { version = "0.41.1", features = ["bundled"], optional = true }
+
+[features]
+bench = ["dep:rusqlite"]
+
+[[bin]]
+name = "lodestone"
+path = "src/main.rs"
+
+[[bin]]
+name = "lodestone-bench"
+path = "src/bin/bench.rs"
+required-features = ["bench"]
+
+[profile.release]
+debug = 1
